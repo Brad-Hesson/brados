@@ -1,0 +1,18 @@
+[package]
+name = "brados"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "brados"
+test = false
+bench = false
+
+[dependencies]
+
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
