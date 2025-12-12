@@ -16,9 +16,10 @@
       brad-utils = flakes.brad-utils.mkLib pkgs;
       fenix = flakes.fenix.packages.${system};
       crane = (flakes.crane.mkLib pkgs).overrideToolchain (fenix.combine [
-        fenix.stable.defaultToolchain
-        fenix.stable.rust-src # need this for rust-analyzer
-        fenix.targets.x86_64-unknown-efi.stable.defaultToolchain
+        # complete means unstable rustc
+        fenix.latest.toolchain
+        fenix.targets.x86_64-unknown-uefi.latest.toolchain
+        # fenix.complete.rust-src # need this for rust-analyzer
       ]);
       crateArgs = {
         # TODO: make a custom filter for files needed for server
@@ -32,6 +33,10 @@
     in
     {
       devShells.default = crane.devShell {
+        packages = [
+          pkgs.qemu_kvm
+        ];
+        OVMF_FIRMWARE = pkgs.OVMF.fd;
         shellHook = brad-utils.vscodeSettingsHook { };
       };
     });
