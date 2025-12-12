@@ -14,6 +14,7 @@ use embedded_graphics::pixelcolor::Bgr888;
 use embedded_graphics::prelude::*;
 use uefi::boot::ScopedProtocol;
 use uefi::proto::console::gop::{BltPixel, GraphicsOutput};
+use uefi::proto::console::pointer::Pointer;
 use uefi::{
     Handle, Status, println,
     proto::console::text::{Input, Output},
@@ -111,31 +112,40 @@ fn main() {
     let input_keys_handle = uefi::boot::get_handle_for_protocol::<Input>().unwrap();
     let input_keys = uefi::boot::open_protocol_exclusive::<Input>(input_keys_handle).unwrap();
 
-    let text_output_handle = uefi::boot::get_handle_for_protocol::<Output>().unwrap();
-    let mut text_output =
-        uefi::boot::open_protocol_exclusive::<Output>(text_output_handle).unwrap();
+    let input_mouse_handle = uefi::boot::get_handle_for_protocol::<Pointer>().unwrap();
+    let mut input_mouse =
+        uefi::boot::open_protocol_exclusive::<Pointer>(input_mouse_handle).unwrap();
 
     let gop_handle = uefi::boot::get_handle_for_protocol::<GraphicsOutput>().unwrap();
-    let mut gop = uefi::boot::open_protocol_exclusive::<GraphicsOutput>(gop_handle).unwrap();
-
+    let gop = uefi::boot::open_protocol_exclusive::<GraphicsOutput>(gop_handle).unwrap();
 
     let mut target = UefiGop(gop);
     let style = MonoTextStyle::new(&FONT_6X10, Bgr888::WHITE);
 
     let mut string = String::new();
-    let modes = target.0.modes().collect::<Vec<_>>();
-    for (i, mode) in modes.iter().enumerate() {
-        string += &format!(
-            "{}: {}x{} ({:?})\n",
-            i,
-            mode.info().resolution().0,
-            mode.info().resolution().1,
-            mode.info().pixel_format()
-        );
+    for i in 0.. {
+        string.clear();
+        let modes = target.0.modes().collect::<Vec<_>>();
+        for (i, mode) in modes.iter().enumerate() {
+            string += &format!(
+                "{}: {}x{} ({:?})\n",
+                i,
+                mode.info().resolution().0,
+                mode.info().resolution().1,
+                mode.info().pixel_format()
+            );
+        }
+        let mode = input_mouse.mode();
+        string += &format!("{mode:#?}\n");
+        let state = input_mouse.read_state();
+        string += &format!("{state:#?}\n");
+        string += &format!("{i}\n");
+
+        let text = embedded_graphics::text::Text::new(&string, Point::new(0, 10), style);
+        target.clear(Bgr888::BLACK).unwrap();
+        text.draw(&mut target).unwrap();
+        std::thread::sleep(Duration::from_millis(1));
     }
-    let text = embedded_graphics::text::Text::new(&string, Point::new(0, 10), style);
-    target.clear(Bgr888::BLACK).unwrap();
-    text.draw(&mut target).unwrap();
 
     let key_event = input_keys.wait_for_key_event().unwrap();
     uefi::boot::wait_for_event(&mut [key_event]).unwrap();
