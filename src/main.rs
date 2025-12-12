@@ -35,14 +35,34 @@ fn setup_uefi_crate() {
     }
 }
 
-struct UefiGop(ScopedProtocol<GraphicsOutput>);
+struct UefiGop {
+    gop: ScopedProtocol<GraphicsOutput>,
+    buffer: Vec<BltPixel>,
+    size: (usize, usize),
+}
+impl UefiGop {
+    fn new(gop: ScopedProtocol<GraphicsOutput>) -> Self {
+        let size = gop.current_mode_info().resolution();
+        let buffer = vec![BltPixel::new(0, 0, 0); size.0 * size.1];
+        UefiGop { gop, buffer, size }
+    }
+    fn flush(&mut self) {
+        self.gop
+            .blt(uefi::proto::console::gop::BltOp::BufferToVideo {
+                buffer: &self.buffer,
+                src: uefi::proto::console::gop::BltRegion::Full,
+                dest: (0, 0),
+                dims: self.size,
+            })
+            .unwrap();
+    }
+}
 
 impl OriginDimensions for UefiGop {
     fn size(&self) -> embedded_graphics::prelude::Size {
-        let res = self.0.current_mode_info().resolution();
         embedded_graphics::prelude::Size {
-            width: res.0 as u32,
-            height: res.1 as u32,
+            width: self.size.0 as u32,
+            height: self.size.1 as u32,
         }
     }
 }
@@ -57,11 +77,8 @@ impl embedded_graphics::draw_target::DrawTarget for UefiGop {
         I: IntoIterator<Item = embedded_graphics::Pixel<Self::Color>>,
     {
         for p in pixels {
-            self.0.blt(uefi::proto::console::gop::BltOp::VideoFill {
-                color: BltPixel::new(p.1.r(), p.1.g(), p.1.b()),
-                dest: (p.0.x as usize, p.0.y as usize),
-                dims: (1, 1),
-            })?;
+            let ind = p.0.x as usize + p.0.y as usize * self.size.0;
+            self.buffer[ind] = BltPixel::new(p.1.r(), p.1.g(), p.1.b());
         }
         Ok(())
     }
@@ -74,17 +91,10 @@ impl embedded_graphics::draw_target::DrawTarget for UefiGop {
     where
         I: IntoIterator<Item = Self::Color>,
     {
-        let mut buffer = Vec::new();
+        let start_ind = area.top_left.x as usize + area.top_left.y as usize * self.size.0;
         for (i, c) in colors.into_iter().enumerate() {
-            buffer[i] = BltPixel::new(c.r(), c.g(), c.b());
+            self.buffer[start_ind + i] = BltPixel::new(c.r(), c.g(), c.b());
         }
-        self.0
-            .blt(uefi::proto::console::gop::BltOp::BufferToVideo {
-                buffer: &buffer,
-                src: uefi::proto::console::gop::BltRegion::Full,
-                dest: (area.top_left.x as usize, area.top_left.y as usize),
-                dims: (area.size.width as usize, area.size.height as usize),
-            })?;
         Ok(())
     }
 
@@ -93,16 +103,17 @@ impl embedded_graphics::draw_target::DrawTarget for UefiGop {
         area: &embedded_graphics::primitives::Rectangle,
         c: Self::Color,
     ) -> Result<(), Self::Error> {
-        self.0.blt(uefi::proto::console::gop::BltOp::VideoFill {
-            color: BltPixel::new(c.r(), c.g(), c.b()),
-            dest: (area.top_left.x as usize, area.top_left.y as usize),
-            dims: (area.size.width as usize, area.size.height as usize),
-        })?;
+        let px = BltPixel::new(c.r(), c.g(), c.b());
+        let start_ind = area.top_left.x as usize + area.top_left.y as usize * self.size.0;
+        let len = area.size.width as usize * area.size.height as usize;
+        self.buffer[start_ind..][..len].fill(px);
         Ok(())
     }
 
-    fn clear(&mut self, color: Self::Color) -> Result<(), Self::Error> {
-        self.fill_solid(&self.bounding_box(), color)
+    fn clear(&mut self, c: Self::Color) -> Result<(), Self::Error> {
+        let px = BltPixel::new(c.r(), c.g(), c.b());
+        self.buffer.fill(px);
+        Ok(())
     }
 }
 
@@ -110,7 +121,7 @@ fn main() {
     setup_uefi_crate();
 
     let input_keys_handle = uefi::boot::get_handle_for_protocol::<Input>().unwrap();
-    let input_keys = uefi::boot::open_protocol_exclusive::<Input>(input_keys_handle).unwrap();
+    let mut input_keys = uefi::boot::open_protocol_exclusive::<Input>(input_keys_handle).unwrap();
 
     let input_mouse_handle = uefi::boot::get_handle_for_protocol::<Pointer>().unwrap();
     let mut input_mouse =
@@ -119,13 +130,14 @@ fn main() {
     let gop_handle = uefi::boot::get_handle_for_protocol::<GraphicsOutput>().unwrap();
     let gop = uefi::boot::open_protocol_exclusive::<GraphicsOutput>(gop_handle).unwrap();
 
-    let mut target = UefiGop(gop);
+    let mut target = UefiGop::new(gop);
     let style = MonoTextStyle::new(&FONT_6X10, Bgr888::WHITE);
 
     let mut string = String::new();
     for i in 0.. {
         string.clear();
-        let modes = target.0.modes().collect::<Vec<_>>();
+        string += &format!("Version 1\n");
+        let modes = target.gop.modes().collect::<Vec<_>>();
         for (i, mode) in modes.iter().enumerate() {
             string += &format!(
                 "{}: {}x{} ({:?})\n",
@@ -144,10 +156,12 @@ fn main() {
         let text = embedded_graphics::text::Text::new(&string, Point::new(0, 10), style);
         target.clear(Bgr888::BLACK).unwrap();
         text.draw(&mut target).unwrap();
-        std::thread::sleep(Duration::from_millis(1));
+        target.flush();
+        if let Some(_) = input_keys.read_key().unwrap() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(16));
     }
 
-    let key_event = input_keys.wait_for_key_event().unwrap();
-    uefi::boot::wait_for_event(&mut [key_event]).unwrap();
-    uefi::runtime::reset(ResetType::SHUTDOWN, Status::SUCCESS, None);
+    uefi::runtime::reset(ResetType::WARM, Status::SUCCESS, None);
 }
