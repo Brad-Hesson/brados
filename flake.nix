@@ -36,7 +36,7 @@
         packages = [
           pkgs.qemu_kvm
         ];
-        OVMF_FIRMWARE = pkgs.OVMF.fd;
+        OVMF_FIRMWARE = "${pkgs.OVMF.fd}/FV/OVMF.fd";
         shellHook = brad-utils.vscodeSettingsHook { };
       };
     });
