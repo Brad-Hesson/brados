@@ -12,3 +12,4 @@ bench = false
 uefi = "0.36.1"
 egui = "0.33"
 tiny-skia = { version = "0.11", default-features = false, features = ["no-std-float", "std"] }
+embedded-graphics = "0.8.1"
